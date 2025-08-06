@@ -2,37 +2,43 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
+st.set_page_config(page_title="NSE OHLC Lookup", page_icon="📊")
 st.title("📊 NSE Stock OHLC Lookup")
 
-symbol = st.text_input("Enter NSE stock symbol (e.g. RELIANCE, TCS)", value="RELIANCE").upper()
+# Input: stock symbol and date
+symbol = st.text_input("Enter NSE stock symbol (e.g. RELIANCE, TCS)", value="RELIANCE").strip().upper()
 date = st.date_input("Select Date")
 
 if st.button("Get OHLC Data"):
     ticker = symbol + ".NS"
-    # Download past 10 days to find closest trading day if selected one fails
-    df = yf.download(ticker, start=date - pd.Timedelta(days=7), end=date + pd.Timedelta(days=1))
+
+    with st.spinner("Fetching data..."):
+        # Download extra days to cover non-trading days
+        start_date = date - pd.Timedelta(days=7)
+        end_date = date + pd.Timedelta(days=1)
+        df = yf.download(ticker, start=start_date, end=end_date)
 
     if df.empty:
-        st.error(f"No data found for {symbol} around {date}.")
+        st.error(f"⚠️ No data found for {symbol} around {date}.")
     else:
-        # Try to get exact date match
-        if str(date) in df.index.strftime('%Y-%m-%d'):
-            row = df.loc[str(date)]
-            st.success(f"Data for {symbol} on {date}:")
+        # Convert index to date only
+        df.index = pd.to_datetime(df.index.date)
+        
+        if date in df.index:
+            row = df.loc[date]
+            st.success(f"✅ Data for {symbol} on {date}:")
         else:
-            # Use the last available date before the selected one
-            available_dates = df.index[df.index < pd.to_datetime(date)]
+            available_dates = df.index[df.index < date]
             if not available_dates.empty:
                 closest_date = available_dates[-1]
                 row = df.loc[closest_date]
-                st.warning(f"No data for {date}. Showing data from previous trading day: {closest_date.date()}")
+                st.warning(f"⚠️ No data for {date}. Showing previous trading day: {closest_date}")
             else:
-                st.error("No trading days found before selected date.")
+                st.error("⚠️ No previous trading days found.")
                 st.stop()
 
-        st.write({
-            "Open": round(row["Open"], 2),
-            "High": round(row["High"], 2),
-            "Low": round(row["Low"], 2),
-            "Close": round(row["Close"], 2),
-        })
+        # Display OHLC
+        st.subheader("📈 OHLC Data")
+        st.dataframe(
+            row[["Open", "High", "Low", "Close"]].round(2).to_frame().T
+        )
