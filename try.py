@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from datetime import timedelta
-import os  # To work with file names
+import os
 
 # Define valid usernames and passwords
 USER_CREDENTIALS = {
@@ -19,8 +19,12 @@ def fetch_stock_data(symbol, start_date, end_date):
         return pd.DataFrame()
 
     stock_data = yf.download(symbol, start=start_date, end=end_date)
+
+    # Ensure the index is a DatetimeIndex
     stock_data.index = pd.to_datetime(stock_data.index)
-    stock_data = stock_data[stock_data.index.dayofweek < 5]  # Keep weekdays only
+
+    # Only keep weekdays (Mon-Fri)
+    stock_data = stock_data[stock_data.index.dayofweek < 5]
     return stock_data
 
 def process_data(df):
@@ -31,36 +35,33 @@ def process_data(df):
     for _, row in df.iterrows():
         symbol = row['symbol']
         date = row['date']
+
+        if not pd.api.types.is_datetime64_any_dtype(type(date)):
+            date = pd.to_datetime(date, dayfirst=True)
+
         previous_day = date - timedelta(days=1)
 
         stock_data = fetch_stock_data(symbol, previous_day - timedelta(days=10), date + timedelta(days=30))
 
-        if not stock_data.empty:
+        if not stock_data.empty and date in stock_data.index:
             try:
-                closing_price = stock_data.loc[date, 'Close']
-                if isinstance(closing_price, pd.Series):
-                    closing_price = closing_price.iloc[0]
+                closing_price = float(stock_data.loc[date]['Close'])
+                current_day_high = float(stock_data.loc[date]['High'])
 
-                current_day_high = stock_data.loc[date, 'High']
-                if isinstance(current_day_high, pd.Series):
-                    current_day_high = current_day_high.iloc[0]
-
+                # Find the previous trading day close
                 previous_trading_day = stock_data.index[stock_data.index < date].max()
-                if previous_trading_day is not None and previous_trading_day in stock_data.index:
-                    previous_close = stock_data.loc[previous_trading_day, 'Close']
-                    if isinstance(previous_close, pd.Series):
-                        previous_close = previous_close.iloc[0]
+                if pd.notnull(previous_trading_day):
+                    previous_close = float(stock_data.loc[previous_trading_day]['Close'])
                 else:
                     previous_close = None
 
-                if previous_close is not None and not pd.isna(previous_close):
-                    current_day_pct = ((closing_price - previous_close) / previous_close) * 100
+                # Calculate current day %
+                if previous_close is not None and previous_close != 0:
+                    current_day_pct = (closing_price - previous_close) / previous_close * 100
                 else:
                     current_day_pct = None
 
-                volume = stock_data.loc[date, 'Volume'] if date in stock_data.index else None
-                if isinstance(volume, pd.Series):
-                    volume = volume.iloc[0]
+                volume = float(stock_data.loc[date]['Volume']) if date in stock_data.index else None
 
                 row_result = {
                     'symbol': symbol,
@@ -71,12 +72,11 @@ def process_data(df):
                     'current_day_%': f"{current_day_pct:.2f}" if current_day_pct is not None else None
                 }
 
+                # Process next 10 trading days
                 future_trading_days = stock_data.index[stock_data.index > date][:10]
-                for i, trading_day in enumerate(future_trading_days):
-                    next_day_high = stock_data.loc[trading_day, 'High']
-                    if isinstance(next_day_high, pd.Series):
-                        next_day_high = next_day_high.iloc[0]
 
+                for i, trading_day in enumerate(future_trading_days):
+                    next_day_high = float(stock_data.loc[trading_day]['High'])
                     result = 'Yes' if closing_price * 1.01 <= next_day_high else 'No'
                     all_results[f'trading_day_{i + 1}'][result] += 1
 
@@ -90,19 +90,16 @@ def process_data(df):
                 results.append(row_result)
 
             except KeyError:
-                row_result = {
+                results.append({**{
                     'symbol': symbol,
                     'date': date.strftime('%d-%m-%Y'),
                     'closing_price': None,
                     'volume': None,
                     'current_day_high': None,
                     'current_day_%': None
-                }
-                for i in range(10):
-                    row_result[f'trading_day_{i + 1}_date'] = None
-                    row_result[f'trading_day_{i + 1}_high'] = None
-                    row_result[f'trading_day_{i + 1}_result'] = 'None'
-                results.append(row_result)
+                }, **{f'trading_day_{i + 1}_date': None for i in range(10)},
+                   **{f'trading_day_{i + 1}_high': None for i in range(10)},
+                   **{f'trading_day_{i + 1}_result': 'None' for i in range(10)}})
 
     results_df = pd.DataFrame(results)
 
@@ -111,15 +108,14 @@ def process_data(df):
     for i in range(10):
         trading_day_index = f'trading_day_{i + 1}'
         remaining_no -= all_results[trading_day_index]['Yes']
-        if remaining_no == 0:
+        if remaining_no <= 0:
             max_trading_day_yes = i + 1
             break
 
     return results_df, all_results, max_trading_day_yes
 
 def highlight_no_rows(row):
-    highlight = ['background-color: yellow'] * len(row) if 'No' in row.values else [''] * len(row)
-    return highlight
+    return ['background-color: yellow' if 'No' in str(val) else '' for val in row]
 
 def sidebar_login():
     st.sidebar.title("Login")
@@ -160,24 +156,19 @@ def main():
                 st.write("100% Yes results not achieved within 10 trading days")
 
             for i in range(10):
-                trading_day_index = f'trading_day_{i + 1}'
-                day_results = all_results[trading_day_index]
+                day_results = all_results[f'trading_day_{i + 1}']
                 total_results = day_results['Yes'] + day_results['No']
                 yes_percentage = (day_results['Yes'] / total_results * 100) if total_results > 0 else 0
                 no_percentage = (day_results['No'] / total_results * 100) if total_results > 0 else 0
 
-                st.write(f"Trading Day {i + 1}:")
-                st.write(f"  Total Yes: {day_results['Yes']}")
-                st.write(f"  Total No: {day_results['No']}")
-                st.write(f"  Yes Percentage: {yes_percentage:.2f}%")
-                st.write(f"  No Percentage: {no_percentage:.2f}%")
+                st.write(f"Trading Day {i + 1}: Yes: {day_results['Yes']} ({yes_percentage:.2f}%), "
+                         f"No: {day_results['No']} ({no_percentage:.2f}%)")
 
             csv = results_df.to_csv(index=False)
-            export_filename = f"{uploaded_filename}_processed.csv"
             st.download_button(
                 label="Download results as CSV",
                 data=csv,
-                file_name=export_filename,
+                file_name=f"{uploaded_filename}_processed.csv",
                 mime='text/csv'
             )
 
