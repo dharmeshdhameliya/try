@@ -19,16 +19,6 @@ ranges = {
 }
 
 # -------------------------------
-# Load stock symbols from CSV
-# -------------------------------
-def load_stock_symbols(file):
-    df = pd.read_csv(file)
-    if 'symbol' not in df.columns:
-        st.error("CSV must have a column named 'symbol'.")
-        return []
-    return df['symbol'].dropna().tolist()
-
-# -------------------------------
 # Find highs within threshold
 # -------------------------------
 def find_high_difference(data, threshold, current_close):
@@ -66,14 +56,12 @@ def get_threshold(close_price):
 # -------------------------------
 def analyze_stock(symbol, price_range, custom_date=None):
     try:
-        # Set end date (custom or today) and start date (30 days before)
         if custom_date:
             end_date = pd.to_datetime(custom_date)
         else:
             end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=30)
 
-        # Download historical data
         data = yf.download(symbol, start=start_date, end=end_date + datetime.timedelta(days=1), interval="1d").dropna()
 
         if data.empty or len(data) < 11:
@@ -90,7 +78,6 @@ def analyze_stock(symbol, price_range, custom_date=None):
         previous_closes = last_10_days['Close'].squeeze()
         previous_highs = last_10_days['High'].squeeze()
 
-        # Convert to lists
         previous_closes = previous_closes.tolist() if hasattr(previous_closes, "tolist") else list(previous_closes)
         previous_highs = previous_highs.tolist() if hasattr(previous_highs, "tolist") else list(previous_highs)
 
@@ -101,7 +88,6 @@ def analyze_stock(symbol, price_range, custom_date=None):
 
         threshold = get_threshold(current_close)
 
-        # Price range filter
         if price_range and not (price_range[0] <= current_close < price_range[1]):
             return [], current_close, current_volume, current_date, current_high, previous_dates, previous_closes, previous_highs
 
@@ -163,7 +149,7 @@ def analyze_stocks_in_batches(symbols, price_range=None, batch_size=100, log_pla
             else:
                 log_placeholder.text(f"[{idx}/{total_symbols}] ❌ No match: {symbol}")
 
-        time.sleep(5)  # avoid hitting Yahoo Finance too quickly
+        time.sleep(5)
 
     return results
 
@@ -205,27 +191,26 @@ def process_data(df):
     return pd.DataFrame(results)
 
 # -------------------------------
-# Streamlit UI
+# Streamlit UI (Manual Input)
 # -------------------------------
-st.title("📈 NSE Stock High Difference Finder (with Live Log & Custom Date)")
+st.title("📈 NSE Stock High Difference Finder (Manual Input Version)")
 
-uploaded_file = st.file_uploader("Upload CSV with NSE stock symbols", type="csv")
+stock_input = st.text_input("Enter stock symbol(s) separated by commas", "RELIANCE.NS, TCS.NS")
 
-if uploaded_file is not None:
-    nse_symbols = load_stock_symbols(uploaded_file)
+if stock_input:
+    nse_symbols = [s.strip() for s in stock_input.split(",") if s.strip()]
 
     if nse_symbols:
         min_price = st.number_input("Min Closing Price", value=0.0)
         max_price = st.number_input("Max Closing Price", value=8000.0)
         price_range = (min_price, max_price)
 
-        batch_size = st.selectbox("Select Batch Size", [10, 20, 50, 100], index=3)
+        batch_size = st.selectbox("Select Batch Size", [1, 5, 10, 20, 50], index=0)
 
-        # Date picker for "current date"
         selected_date = st.date_input("Select Current Date", datetime.date.today())
 
-        if st.button("Run Batch"):
-            log_placeholder = st.empty()  # For real-time updates
+        if st.button("Run Analysis"):
+            log_placeholder = st.empty()
             st.info(f"Fetching data up to {selected_date}, please wait...")
 
             raw_results = analyze_stocks_in_batches(
@@ -247,4 +232,4 @@ if uploaded_file is not None:
             else:
                 st.warning("No stocks met the criteria.")
 else:
-    st.write("Please upload a CSV file with NSE stock symbols.")
+    st.write("Please enter at least one stock symbol.")
